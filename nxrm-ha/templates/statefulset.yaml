@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: {{ template "nexus.fullname" . }}
-  namespace: {{ default .Release.Namespace .Values.namespaces.nexusNs.name | quote }}
+  namespace: {{ .Values.namespaces.nexusNs.name }}
   labels:
 {{ include "nexus.labels" . | nindent 4 }}
   {{- if .Values.nexus.extraLabels }}
@@ -20,10 +20,6 @@ spec:
   {{ else }}
   replicas: 1
   {{ end }}
-  {{- if not .Values.statefulset.container.env.zeroDowntimeEnabled }}
-  updateStrategy:
-    type: OnDelete
-  {{- end }}
   serviceName: {{ include "nexus.service.headless" . }}
   selector:
     matchLabels:
@@ -142,17 +138,6 @@ spec:
                   key: nexus-admin-password
             - name: NEXUS_SECURITY_RANDOMPASSWORD
               value: "false"
-            - name: NEXUS_ZERO_DOWNTIME_ENABLED
-          {{- $zeroDowntimeEnabled := default false .Values.statefulset.container.env.zeroDowntimeEnabled }}
-              value: "{{ toString $zeroDowntimeEnabled }}"
-          {{- if or .Values.secret.nexusSecret.enabled (and .Values.externalsecrets.enabled .Values.externalsecrets.secrets.nexusSecret.enabled ) }}
-            - name: NEXUS_SECRETS_KEY_FILE
-          {{ if or (and .Values.aws.secretmanager.enabled .Values.secret.aws.nexusSecret.enabled) (and .Values.azure.keyvault.enabled .Values.secret.azure.nexusSecret.enabled ) }}
-              value: /nxrm-secrets/{{ .Values.secret.nexusSecret.name }}
-          {{ else }}
-              value: {{ .Values.secret.nexusSecret.mountPath }}/{{ .Values.secret.nexusSecret.name }}
-          {{ end }}
-          {{ end }}
             - name: LICENSE_FILE
           {{- if or .Values.aws.secretmanager.enabled .Values.azure.keyvault.enabled  }}
               value: /nxrm-secrets/{{ .Values.secret.license.name }}
@@ -166,8 +151,14 @@ spec:
           -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://${DB_HOST}:{{ .Values.statefulset.container.env.nexusDBPort }}/${DB_NAME}{{ .Values.statefulset.container.env.jdbcUrlParams }} \
           -Dnexus.datastore.nexus.username=${DB_USER} \
           -Dnexus.datastore.nexus.password=${DB_PASSWORD}"
-          {{ else }}
+          {{ else if .Values.secret.license.enabled }}
               value: "{{ .Values.statefulset.container.env.install4jAddVmParams }} -Dnexus.licenseFile=${LICENSE_FILE} \
+              -Dnexus.datastore.enabled=true -Djava.util.prefs.userRoot=${NEXUS_DATA}/javaprefs \
+              -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://${DB_HOST}:{{ .Values.statefulset.container.env.nexusDBPort }}/${DB_NAME}{{ .Values.statefulset.container.env.jdbcUrlParams }} \
+              -Dnexus.datastore.nexus.username=${DB_USER} \
+              -Dnexus.datastore.nexus.password=${DB_PASSWORD}"
+          {{ else }}
+              value: "{{ .Values.statefulset.container.env.install4jAddVmParams }} -Dnexus.loadAsOSS=true \
               -Dnexus.datastore.enabled=true -Djava.util.prefs.userRoot=${NEXUS_DATA}/javaprefs \
               -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://${DB_HOST}:{{ .Values.statefulset.container.env.nexusDBPort }}/${DB_NAME}{{ .Values.statefulset.container.env.jdbcUrlParams }} \
               -Dnexus.datastore.nexus.username=${DB_USER} \
@@ -177,21 +168,14 @@ spec:
             {{ toYaml .Values.statefulset.container.additionalEnv | nindent 12 }}
           {{- end }}
           volumeMounts:
-          {{- if or .Values.aws.secretmanager.enabled .Values.azure.keyvault.enabled .Values.secret.dbSecret.enabled .Values.externalsecrets.enabled }}
+          {{- if or .Values.aws.secretmanager.enabled .Values.azure.keyvault.enabled .Values.secret.dbSecret.enabled }}
             - name: nxrm-secrets
               mountPath: /nxrm-secrets
           {{- end }}
-          {{- if or .Values.secret.license.licenseSecret.enabled .Values.externalsecrets.enabled }}
+          {{- if .Values.secret.license.licenseSecret.enabled }}
             - name: license-volume
               mountPath: {{ .Values.secret.license.licenseSecret.mountPath }}
               readOnly: true
-          {{ end }}
-          {{-  if or ( .Values.secret.nexusSecret.enabled ) (and .Values.externalsecrets.enabled .Values.externalsecrets.secrets.nexusSecret.enabled ) }}
-          {{- if and (not .Values.secret.aws.nexusSecret.enabled) (not .Values.secret.azure.nexusSecret.enabled) }}
-            - name: nexus-secret-volume
-              mountPath: {{ .Values.secret.nexusSecret.mountPath }}
-              readOnly: true
-          {{ end }}
           {{ end }}
             - name: nexus-data
               mountPath: /nexus-data
@@ -260,7 +244,7 @@ spec:
       {{- if .Values.statefulset.additionalVolumes }}
         {{ toYaml .Values.statefulset.additionalVolumes | nindent 8 }}
       {{- end }}
-      {{- if or .Values.aws.secretmanager.enabled .Values.azure.keyvault.enabled .Values.secret.dbSecret.enabled .Values.externalsecrets.enabled }}
+      {{- if or .Values.aws.secretmanager.enabled .Values.azure.keyvault.enabled .Values.secret.dbSecret.enabled }}
         - name: nxrm-secrets
         {{- if or .Values.aws.secretmanager.enabled .Values.azure.keyvault.enabled }}
           csi:
@@ -274,17 +258,10 @@ spec:
             secretName: {{ template "nexus.name" . }}-dbsecret
         {{ end }}
       {{ end }}
-      {{- if or .Values.secret.license.licenseSecret.enabled .Values.externalsecrets.enabled }}
+      {{- if .Values.secret.license.licenseSecret.enabled }}
         - name: license-volume
           secret:
             secretName: {{ .Values.secret.license.name }}
-      {{ end }}
-      {{- if or (.Values.secret.nexusSecret.enabled) (and .Values.externalsecrets.enabled .Values.externalsecrets.secrets.nexusSecret.enabled) }}
-        {{- if and (not .Values.secret.aws.nexusSecret.enabled) (not .Values.secret.azure.nexusSecret.enabled) }}
-        - name: nexus-secret-volume
-          secret:
-            secretName: {{ .Values.secret.nexusSecret.name }}
-        {{ end }}
       {{ end }}
       {{- if .Values.logStorage.combineTaskLogs }}
         - name: logback-tasklogfile-override
